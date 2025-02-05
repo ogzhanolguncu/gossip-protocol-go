@@ -28,7 +28,7 @@ func (n *Node) _UpdateCounter(counter uint64) {
 	n.version++
 }
 
-func (n *Node) GetState() (uint64, uint32) {
+func (n *Node) GetState() (counter uint64, version uint32) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 
