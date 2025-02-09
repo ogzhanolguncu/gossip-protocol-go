@@ -1,6 +1,7 @@
 package network
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -39,6 +40,7 @@ func NewServer(addr string, listener net.Listener, node *node.Node, peers *node.
 func (s *Server) Start() error {
 	defer s.listener.Close()
 
+	// Gossip goroutine with context
 	go func() {
 		ticker := time.NewTicker(s.gossipInterval)
 		defer ticker.Stop()
@@ -50,61 +52,15 @@ func (s *Server) Start() error {
 		}
 	}()
 
-	log.Printf("[Node %s] Starting to accept connections", s.addr)
-	buffer := make([]byte, node.MaxMessageSize)
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
-			log.Printf("[Node %s] Error accepting connection: %v", s.addr, err)
-			continue
-		}
-		log.Printf("[Node %s] Accepted connection from %s", s.addr, conn.RemoteAddr())
-
-		_, err = conn.Read(buffer)
-		if err != nil {
-			log.Printf("[Node %s] Error reading from %s: %v", s.addr, conn.RemoteAddr(), err)
-			continue
-		}
-
-		isValid := validateMessage(buffer, s, conn)
-		if !isValid {
-			continue
-		}
-
-		s.peers.Connect(conn.RemoteAddr().String(), conn)
-
-		msgType := buffer[0]
-		counter, version := s.node.GetState()
-
-		switch msgType {
-		case node.MessageTypeVersionCheck:
-			incVersion := node.DecodeVersionCheck(buffer)
-			log.Printf("[Node %s] Received version check from %s (their version=%d, my version=%d)",
-				s.addr, conn.RemoteAddr(), incVersion, version)
-
-			if incVersion > version {
-				log.Printf("[Node %s] Their version is higher, requesting update", s.addr)
-				err := s.pullVersion(version, conn)
-				if err != nil {
-					log.Printf("[Node %s] Pull version failed: %v", s.addr, err)
-					continue
-				}
-
-			} else if incVersion < version {
-				log.Printf("[Node %s] Their version is lower, sending update", s.addr)
-				pushMsg := node.EncodeCounterUpdate(version, counter)
-				_, err := conn.Write(pushMsg)
-				if err != nil {
-					log.Printf("[Node %s] Failed to send update to %s: %v", s.addr, conn.RemoteAddr(), err)
-					continue
-				}
-			} else {
-				log.Printf("[Node %s] Versions are equal (%d), no update needed", s.addr, version)
+			if !errors.Is(err, net.ErrClosed) {
+				log.Printf("[Node %s] Error accepting connection: %v", s.addr, err)
 			}
-		default:
-			log.Printf("[Node %s] Received unknown message type from %s: 0x%02x",
-				s.addr, conn.RemoteAddr(), buffer[0])
+			continue
 		}
+		s.handleGossip(conn)
 	}
 }
 
@@ -184,6 +140,56 @@ func (s *Server) pullVersion(version uint32, conn net.Conn) error {
 		s.addr, peerVersion, peerCounter)
 
 	return nil
+}
+
+func (s *Server) handleGossip(conn net.Conn) {
+	buffer := make([]byte, node.MaxMessageSize)
+
+	_, err := conn.Read(buffer)
+	if err != nil {
+		log.Printf("[Node %s] Error reading from %s: %v", s.addr, conn.RemoteAddr(), err)
+		return
+	}
+
+	isValid := validateMessage(buffer, s, conn)
+	if !isValid {
+		return
+	}
+
+	s.peers.Connect(conn.RemoteAddr().String(), conn)
+
+	msgType := buffer[0]
+	counter, version := s.node.GetState()
+
+	switch msgType {
+	case node.MessageTypeVersionCheck:
+		incVersion := node.DecodeVersionCheck(buffer)
+		log.Printf("[Node %s] Received version check from %s (their version=%d, my version=%d)",
+			s.addr, conn.RemoteAddr(), incVersion, version)
+
+		if incVersion > version {
+			log.Printf("[Node %s] Their version is higher, requesting update", s.addr)
+			err := s.pullVersion(version, conn)
+			if err != nil {
+				log.Printf("[Node %s] Pull version failed: %v", s.addr, err)
+				return
+			}
+
+		} else if incVersion < version {
+			log.Printf("[Node %s] Their version is lower, sending update", s.addr)
+			pushMsg := node.EncodeCounterUpdate(version, counter)
+			_, err := conn.Write(pushMsg)
+			if err != nil {
+				log.Printf("[Node %s] Failed to send update to %s: %v", s.addr, conn.RemoteAddr(), err)
+				return
+			}
+		} else {
+			log.Printf("[Node %s] Versions are equal (%d), no update needed", s.addr, version)
+		}
+	default:
+		log.Printf("[Node %s] Received unknown message type from %s: 0x%02x",
+			s.addr, conn.RemoteAddr(), buffer[0])
+	}
 }
 
 func validateMessage(buffer []byte, s *Server, conn net.Conn) bool {
