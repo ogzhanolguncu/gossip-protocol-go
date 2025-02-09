@@ -5,6 +5,9 @@ import "encoding/binary"
 const (
 	MessageTypeVersionCheck  = 0x01
 	MessageTypeCounterUpdate = 0x02
+
+	MinMessageSize = 5
+	MaxMessageSize = 13
 )
 
 type Message struct {
@@ -14,7 +17,7 @@ type Message struct {
 }
 
 // binary.BigEndian ensures the bytes are in network order
-func Encode(version uint32, counter uint64) []byte {
+func EncodeCounterUpdate(version uint32, counter uint64) []byte {
 	buffer := make([]byte, 13)
 
 	buffer[0] = MessageTypeCounterUpdate

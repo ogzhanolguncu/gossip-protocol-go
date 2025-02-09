@@ -17,20 +17,17 @@ func startNode(id uint64, addr string, peerAddr string, version uint32) error {
 		return fmt.Errorf("failed to start listener on %s: %v", addr, err)
 	}
 
-	// Initialize peer manager
 	peerManager := node.NewPeerManager()
-	peerManager.AddPeer(peerAddr) // Add next node in ring
+	peerManager.AddPeer(peerAddr)
 
-	// Create node with initial counter
-	n := node.NewNode(addr, id, version) // You'll need to implement this
+	n := node.NewNode(addr, id, version)
 
-	// Create and start server
 	server := network.NewServer(
 		addr,
 		listener,
 		n,
 		peerManager,
-		2*time.Second, // gossip interval
+		2*time.Second,
 	)
 
 	return server.Start()
