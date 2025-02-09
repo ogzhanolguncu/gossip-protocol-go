@@ -10,11 +10,11 @@ type Node struct {
 	mu sync.RWMutex
 }
 
-func NewNode(addr string, counter uint64) *Node {
+func NewNode(addr string, counter uint64, version uint32) *Node {
 	return &Node{
 		addr:    addr,
 		counter: counter,
-		version: 1, // Initial version starts from "1"
+		version: version,
 		mu:      sync.RWMutex{},
 	}
 }
