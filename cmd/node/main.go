@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -16,16 +17,15 @@ import (
 )
 
 func main() {
-	// Create context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Setup signal handling
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// Create a WaitGroup to track all nodes
 	var wg sync.WaitGroup
+	activeNodes := make(map[string]*network.Server)
+	nodesMutex := sync.Mutex{}
 
 	nodes := map[int]struct {
 		addrs   [2]string
@@ -41,37 +41,42 @@ func main() {
 		initVersion := config.version
 		wg.Add(1)
 
-		err := startNode(ctx, &wg, uint64(id), myAddr, peerAddr, initVersion)
-		if err != nil {
-			log.Printf("Failed to start node %d: %v", id, err)
-			continue
-		}
+		go func(id int, myAddr, peerAddr string, version uint32) {
+			server, err := startNode(ctx, &wg, uint64(id), myAddr, peerAddr, version)
+			if err != nil {
+				log.Printf("Failed to start node %d: %v", id, err)
+				return
+			}
+
+			nodesMutex.Lock()
+			activeNodes[myAddr] = server
+			nodesMutex.Unlock()
+		}(id, myAddr, peerAddr, initVersion)
+
+		time.Sleep(1 * time.Second)
 	}
 
-	<-sigChan
-	log.Println("Received shutdown signal, initiating graceful shutdown...")
+	sig := <-sigChan
+	log.Printf("Received %v signal, initiating coordinated shutdown...", sig)
 	cancel()
 
-	shutdownComplete := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(shutdownComplete)
-	}()
-
-	select {
-	case <-shutdownComplete:
-		log.Println("All nodes shut down successfully")
-	case <-time.After(10 * time.Second):
-		log.Println("Shutdown timed out")
+	nodesMutex.Lock()
+	for addr, server := range activeNodes {
+		counter, version := server.Node.GetState()
+		log.Printf("❗ [Node %s] Final state - Version: %d, Counter: %d",
+			addr, version, counter)
 	}
+	nodesMutex.Unlock()
+
+	// Force immediate shutdown
+	os.Exit(0)
 }
 
-func startNode(ctx context.Context, wg *sync.WaitGroup, id uint64, addr string, peerAddr string, version uint32) error {
-	defer wg.Done()
-
+func startNode(ctx context.Context, wg *sync.WaitGroup, id uint64, addr string, peerAddr string, version uint32) (*network.Server, error) {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("failed to start listener on %s: %v", addr, err)
+		wg.Done() // Important: don't forget to signal we're done if we fail
+		return nil, fmt.Errorf("failed to start listener on %s: %v", addr, err)
 	}
 
 	peerManager := node.NewPeerManager()
@@ -86,12 +91,25 @@ func startNode(ctx context.Context, wg *sync.WaitGroup, id uint64, addr string, 
 		2*time.Second,
 	)
 
-	// Start server with context
+	// Start HTTP server
+	_, portStr, _ := net.SplitHostPort(addr)
+	tcpPort, _ := strconv.Atoi(portStr)
+	httpPort := tcpPort + 1000
+	httpServer := network.NewHTTPServer(server, httpPort)
+
 	go func() {
-		if err := server.Start(); err != nil {
-			log.Printf("Node %d server error: %v", id, err)
+		if err := httpServer.StartHTTP(); err != nil {
+			log.Printf("[Node %s] HTTP server failed: %v", addr, err)
 		}
 	}()
 
-	return nil
+	// Start server in goroutine
+	go func() {
+		defer wg.Done()
+		if err := server.Start(ctx); err != nil {
+			log.Printf("[Node %s] Server failed: %v", addr, err)
+		}
+	}()
+
+	return server, nil
 }
