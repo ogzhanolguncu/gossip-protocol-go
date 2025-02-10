@@ -6,10 +6,8 @@ import (
 )
 
 const (
-	MessageTypeSyncRequest = iota + 1
-	MessageTypeSyncResponse
-	MessageTypePull
-	MessageTypePush
+	MessageTypePull = 0x01
+	MessageTypePush = 0x02
 )
 
 type Message struct {
