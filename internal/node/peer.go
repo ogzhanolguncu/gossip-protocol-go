@@ -1,13 +1,9 @@
 package node
 
-import (
-	"net"
-	"sync"
-)
+import "sync"
 
 type Peer struct {
 	Addr    string
-	Conn    net.Conn
 	Version uint32
 }
 
@@ -26,44 +22,17 @@ func (pm *PeerManager) AddPeer(addr string) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	if _, exists := pm.peers[addr]; !exists {
-		pm.peers[addr] = &Peer{
-			Addr: addr,
-		}
+		pm.peers[addr] = &Peer{Addr: addr}
 	}
 }
 
-func (pm *PeerManager) Connect(addr string, conn net.Conn) {
+func (pm *PeerManager) RemovePeer(addr string) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
-
-	// If we already have this peer
-	if peer, exists := pm.peers[addr]; exists {
-		// Close existing connection if it exists
-		if peer.Conn != nil {
-			peer.Conn.Close()
-		}
-		peer.Conn = conn
-	} else {
-		// New peer
-		pm.peers[addr] = &Peer{
-			Addr: addr,
-			Conn: conn,
-		}
-	}
+	delete(pm.peers, addr)
 }
 
-func (pm *PeerManager) Disconnect(addr string) {
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
-	if peer, exists := pm.peers[addr]; exists {
-		if peer.Conn != nil {
-			peer.Conn.Close()
-			peer.Conn = nil
-		}
-	}
-}
-
-func (pm *PeerManager) UpdateVersionNumber(addr string, version uint32) {
+func (pm *PeerManager) UpdateVersion(addr string, version uint32) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	if peer, exists := pm.peers[addr]; exists {
@@ -71,21 +40,16 @@ func (pm *PeerManager) UpdateVersionNumber(addr string, version uint32) {
 	}
 }
 
-// GetPeers now only returns peers with valid addresses (not ephemeral ports)
-func (pm *PeerManager) GetPeers() map[string]*Peer {
+func (pm *PeerManager) GetPeers() []*Peer {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
 
-	peersCopy := make(map[string]*Peer, len(pm.peers))
-	for k, v := range pm.peers {
-		// Only copy peers with original addresses (not ephemeral ports)
-		if v.Addr == k {
-			peersCopy[k] = &Peer{
-				Addr:    v.Addr,
-				Conn:    v.Conn,
-				Version: v.Version,
-			}
-		}
+	peers := make([]*Peer, 0, len(pm.peers))
+	for _, p := range pm.peers {
+		peers = append(peers, &Peer{
+			Addr:    p.Addr,
+			Version: p.Version,
+		})
 	}
-	return peersCopy
+	return peers
 }

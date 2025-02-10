@@ -1,26 +1,62 @@
 package node
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/ogzhanolguncu/gossip-protocol/internal/protocol"
+	"github.com/ogzhanolguncu/gossip-protocol/internal/transport"
+)
 
 type Node struct {
-	addr    string //  This node's address (e.g., "localhost:8080")
-	counter uint64 //  Value we are gossiping about
-	version uint32 //  Version number of our counter
-
-	mu sync.RWMutex
+	addr      string
+	counter   uint64
+	version   uint32
+	transport protocol.Transport
+	peers     *PeerManager
+	mu        sync.RWMutex
 }
 
-func NewNode(addr string, counter uint64, version uint32) *Node {
-	return &Node{
-		addr:    addr,
-		counter: counter,
-		version: version,
-		mu:      sync.RWMutex{},
+func NewNode(addr string, counter uint64, version uint32) (*Node, error) {
+	t, err := transport.NewTCPTransport(addr)
+	if err != nil {
+		return nil, err
 	}
+
+	n := &Node{
+		addr:      addr,
+		counter:   counter,
+		version:   version,
+		transport: t,
+		peers:     NewPeerManager(),
+	}
+
+	t.Listen(n.handleMessage)
+	return n, nil
 }
 
-// This will used only for internal increments for initial setup
-func (n *Node) _UpdateCounter(counter uint64) {
+func (n *Node) handleMessage(msg *protocol.Message) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	switch msg.Type {
+	case protocol.MessageTypePush:
+		if msg.Version > n.version {
+			n.version = msg.Version
+			n.counter = msg.Counter
+		}
+	case protocol.MessageTypePull:
+		response := &protocol.Message{
+			Type:    protocol.MessageTypePush,
+			Version: n.version,
+			Counter: n.counter,
+		}
+		return n.transport.Send(n.addr, response)
+	}
+
+	return nil
+}
+
+func (n *Node) UpdateState(counter uint64) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
@@ -28,21 +64,12 @@ func (n *Node) _UpdateCounter(counter uint64) {
 	n.version++
 }
 
-func (n *Node) GetState() (counter uint64, version uint32) {
+func (n *Node) GetState() (uint64, uint32) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
-
 	return n.counter, n.version
 }
 
-func (n *Node) UpdateCounter(version uint32, counter uint64) bool {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if version > n.version {
-		n.version = version
-		n.counter = counter
-		return true
-	}
-	return false
+func (n *Node) Close() error {
+	return n.transport.Close()
 }
