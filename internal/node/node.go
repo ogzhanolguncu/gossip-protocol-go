@@ -153,6 +153,12 @@ func (n *Node) GetState() (uint64, uint32) {
 	return n.counter, n.version
 }
 
+func (n *Node) GetAddr() string {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return n.addr
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
