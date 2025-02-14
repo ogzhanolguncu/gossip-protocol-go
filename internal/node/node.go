@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"math/rand"
+	"strings"
 	"sync"
 	"time"
 
@@ -69,8 +70,15 @@ func (n *Node) sync() {
 		return
 	}
 
-	log.Printf("[Node %s] Starting sync round with %d peers. Current state: version=%d, counter=%d",
-		n.addr, len(peers), n.version, n.counter)
+	peerAddrs := make([]string, 0, len(peers))
+	for _, v := range peers {
+		peerAddrs = append(peerAddrs, v.Addr)
+	}
+	log.Printf("[Node %s] Starting sync round with peers: %s. Current state: version=%d, counter=%d",
+		n.addr,
+		strings.Join(peerAddrs, ", "), // Join addresses with comma and space
+		n.version,
+		n.counter)
 
 	// Randomly select peers to sync with
 	numPeers := min(n.maxSyncPeers, len(peers))
@@ -151,6 +159,20 @@ func (n *Node) GetState() (uint64, uint32) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	return n.counter, n.version
+}
+
+func (n *Node) GetAddr() string {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return n.addr
+}
+
+func (n *Node) GetPeers() []*Peer {
+	return n.peers.GetPeers()
+}
+
+func (n *Node) RemovePeer(peerAddr string) {
+	n.peers.RemovePeer(peerAddr)
 }
 
 func min(a, b int) int {
