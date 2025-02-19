@@ -99,24 +99,42 @@ func (dc *DiscoveryClient) discoverPeers() {
 		return
 	}
 
-	// Track current peers for cleanup
-	currentPeers := make(map[string]bool)
+	// First, build the map of active peers from discovery
+	activePeers := make(map[string]bool)
 	for _, peer := range peers {
-		currentPeers[peer.Addr] = true
-		if peer.Addr != dc.localNode.GetAddr() && peer.IsActive {
-			dc.localNode.AddPeer(peer.Addr)
+		if peer.IsActive && peer.Addr != dc.localNode.GetAddr() {
+			activePeers[peer.Addr] = true
 		}
 	}
 
+	// Get existing peers before making any changes
+	existingPeers := dc.localNode.GetPeers()
+	existingPeerMap := make(map[string]bool)
+	for _, peer := range existingPeers {
+		existingPeerMap[peer.Addr] = true
+	}
+
 	// Remove peers that are no longer active
-	for _, existingPeer := range dc.localNode.GetPeers() {
-		if !currentPeers[existingPeer.Addr] {
+	for _, existingPeer := range existingPeers {
+		if !activePeers[existingPeer.Addr] {
+			log.Printf("[Node %s] Removing inactive peer: %s",
+				dc.localNode.GetAddr(), existingPeer.Addr)
 			dc.localNode.RemovePeer(existingPeer.Addr)
 		}
 	}
 
+	// Add new active peers
+	for peerAddr := range activePeers {
+		if !existingPeerMap[peerAddr] {
+			log.Printf("[Node %s] Adding new peer: %s",
+				dc.localNode.GetAddr(), peerAddr)
+			dc.localNode.AddPeer(peerAddr)
+		}
+	}
+
+	activePeerCount := len(activePeers)
 	log.Printf("[Node %s] Updated peers from discovery server - active peers: %d",
-		dc.localNode.GetAddr(), len(peers))
+		dc.localNode.GetAddr(), activePeerCount)
 }
 
 func (dc *DiscoveryClient) StartHeartbeat(interval time.Duration) {

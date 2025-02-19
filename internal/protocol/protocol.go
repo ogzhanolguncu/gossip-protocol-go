@@ -38,6 +38,6 @@ func DecodeMessage(data []byte) (*Message, error) {
 
 type Transport interface {
 	Send(addr string, msg *Message) error
-	Listen(handler func(*Message) error) error
+	Listen(handler func(string, *Message) error) error
 	Close() error
 }

@@ -31,11 +31,6 @@ func main() {
 		{"localhost:8001", 1, 1},
 		{"localhost:8002", 2, 2},
 		{"localhost:8003", 3, 3},
-		{"localhost:8004", 4, 4},
-		{"localhost:8005", 5, 5},
-		{"localhost:8006", 6, 6},
-		{"localhost:8007", 7, 7},
-		{"localhost:8008", 8, 8},
 	}
 
 	// Start nodes and register with discovery

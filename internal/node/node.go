@@ -4,7 +4,6 @@ import (
 	"context"
 	"log"
 	"math/rand"
-	"strings"
 	"sync"
 	"time"
 
@@ -63,24 +62,54 @@ func (n *Node) startAntiEntropy() {
 	}
 }
 
+func (n *Node) handleMessage(sourceAddr string, msg *protocol.Message) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	log.Printf("[Node %s] Received message from %s type=%d, version=%d, counter=%d",
+		n.addr, sourceAddr, msg.Type, msg.Version, msg.Counter)
+
+	switch msg.Type {
+	case protocol.MessageTypePull:
+		response := &protocol.Message{
+			Type:    protocol.MessageTypePush,
+			Version: n.version,
+			Counter: n.counter,
+		}
+
+		// Update our state if pull has higher version
+		if msg.Version > n.version {
+			n.version = msg.Version
+			n.counter = msg.Counter
+			// Propagate update to others
+			n.propagateUpdate(sourceAddr)
+		}
+
+		return n.transport.Send(sourceAddr, response)
+
+	case protocol.MessageTypePush:
+		// Update state if push has higher version
+		if msg.Version > n.version {
+			n.version = msg.Version
+			n.counter = msg.Counter
+			// Propagate update to others
+			n.propagateUpdate(sourceAddr)
+		}
+	}
+	return nil
+}
+
 func (n *Node) sync() {
+	n.mu.RLock()
 	peers := n.peers.GetPeers()
+	currentVersion := n.version
+	n.mu.RUnlock()
+
 	if len(peers) == 0 {
 		log.Printf("[Node %s] No peers available for sync", n.addr)
 		return
 	}
 
-	peerAddrs := make([]string, 0, len(peers))
-	for _, v := range peers {
-		peerAddrs = append(peerAddrs, v.Addr)
-	}
-	log.Printf("[Node %s] Starting sync round with peers: %s. Current state: version=%d, counter=%d",
-		n.addr,
-		strings.Join(peerAddrs, ", "), // Join addresses with comma and space
-		n.version,
-		n.counter)
-
-	// Randomly select peers to sync with
 	numPeers := min(n.maxSyncPeers, len(peers))
 	selectedPeers := make([]*Peer, len(peers))
 	copy(selectedPeers, peers)
@@ -88,53 +117,62 @@ func (n *Node) sync() {
 		selectedPeers[i], selectedPeers[j] = selectedPeers[j], selectedPeers[i]
 	})
 
+	// Use a WaitGroup to track sync completion
+	var wg sync.WaitGroup
 	for _, peer := range selectedPeers[:numPeers] {
-		msg := &protocol.Message{
-			Type:    protocol.MessageTypePull,
-			Version: n.version,
-			Counter: n.counter,
-		}
-		n.transport.Send(peer.Addr, msg)
+		wg.Add(1)
+		go func(peerAddr string) {
+			defer wg.Done()
+			msg := &protocol.Message{
+				Type:    protocol.MessageTypePull,
+				Version: currentVersion,
+				Counter: n.counter,
+			}
+			if err := n.transport.Send(peerAddr, msg); err != nil {
+				log.Printf("[Node %s] Failed to sync with peer %s: %v",
+					n.addr, peerAddr, err)
+			}
+		}(peer.Addr)
+	}
+
+	// Wait for all sync attempts to complete with timeout
+	syncTimeout := time.NewTimer(n.syncInterval / 2)
+	syncDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(syncDone)
+	}()
+
+	select {
+	case <-syncDone:
+		// All syncs completed
+	case <-syncTimeout.C:
+		log.Printf("[Node %s] Sync round timed out", n.addr)
 	}
 }
 
-func (n *Node) handleMessage(msg *protocol.Message) error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	log.Printf("[Node %s] Received message type=%d, version=%d, counter=%d",
-		n.addr, msg.Type, msg.Version, msg.Counter)
-
-	switch msg.Type {
-	case protocol.MessageTypePull:
-		if msg.Version < n.version {
-			// Send our higher version
-			response := &protocol.Message{
-				Type:    protocol.MessageTypePush,
-				Version: n.version,
-				Counter: n.counter,
-			}
-			return n.transport.Send(n.addr, response)
-		} else if msg.Version > n.version {
-			// Update our state and acknowledge
-			n.version = msg.Version
-			n.counter = msg.Counter
-			response := &protocol.Message{
-				Type:    protocol.MessageTypePush,
-				Version: msg.Version,
-				Counter: msg.Counter,
-			}
-			return n.transport.Send(n.addr, response)
-		}
-	case protocol.MessageTypePush:
-		if msg.Version > n.version {
-			n.version = msg.Version
-			n.counter = msg.Counter
-			log.Printf("[Node %s] Updated state to version=%d, counter=%d",
-				n.addr, n.version, n.counter)
-		}
+// propagateUpdate sends the current state to all peers except the source
+func (n *Node) propagateUpdate(sourceAddr string) {
+	updateMsg := &protocol.Message{
+		Type:    protocol.MessageTypePush,
+		Version: n.version,
+		Counter: n.counter,
 	}
-	return nil
+
+	peers := n.peers.GetPeers()
+	for _, peer := range peers {
+		// Skip the source to avoid sending the update back
+		if peer.Addr == sourceAddr {
+			continue
+		}
+
+		go func(peerAddr string) {
+			if err := n.transport.Send(peerAddr, updateMsg); err != nil {
+				log.Printf("[Node %s] Failed to propagate update to peer %s: %v",
+					n.addr, peerAddr, err)
+			}
+		}(peer.Addr)
+	}
 }
 
 func (n *Node) AddPeer(addr string) {

@@ -11,7 +11,7 @@ import (
 type TCPTransport struct {
 	addr     string
 	listener net.Listener
-	handler  func(*protocol.Message) error
+	handler  func(string, *protocol.Message) error
 	ctx      context.Context
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
@@ -44,7 +44,7 @@ func (t *TCPTransport) Send(addr string, msg *protocol.Message) error {
 	return err
 }
 
-func (t *TCPTransport) Listen(handler func(*protocol.Message) error) error {
+func (t *TCPTransport) Listen(handler func(string, *protocol.Message) error) error {
 	t.handler = handler
 	t.wg.Add(1)
 
@@ -82,7 +82,7 @@ func (t *TCPTransport) handleConn(conn net.Conn) {
 	}
 
 	if t.handler != nil {
-		t.handler(msg)
+		t.handler(conn.RemoteAddr().String(), msg)
 	}
 }
 
